@@ -33,25 +33,64 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Android SDK (có sẵn trên máy chủ)
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
         run: |
-          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$SDKM" --licenses > /dev/null || true
-          "$SDKM" "platforms;android-36" "build-tools;36.0.0"
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
 
+      - name: Chuẩn bị khóa ký (nếu có secret)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=${{ secrets.KEY_ALIAS }}" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "Dùng khóa ký từ GitHub Secrets"
+          else
+            echo "Không có secret -> dùng khóa thử nghiệm cố định app/weatherm3-test.jks"
+          fi
+
+      - name: Build release APK (R8, đã ký)
+        working-directory: ${{ env.PROJ }}
+        run: gradle --no-daemon assembleRelease -PcomposeReports=true --stacktrace
+
       - name: Build debug APK
         working-directory: ${{ env.PROJ }}
         run: gradle --no-daemon assembleDebug --stacktrace
 
-      - name: Upload APK
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: WeatherM3-release-apk
+          path: ${{ env.PROJ }}/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: WeatherM3-debug-apk
           path: ${{ env.PROJ }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload Compose stability reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-reports
+          path: |
+            ${{ env.PROJ }}/app/build/compose_reports
+            ${{ env.PROJ }}/app/build/compose_metrics
+          if-no-files-found: ignore
+          retention-days: 7
